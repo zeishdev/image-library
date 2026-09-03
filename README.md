@@ -9,6 +9,7 @@ Docker images for the spinupdev platform. Images are published to
 |-------|------|-------------|
 | [`base`](images/base) | ubuntu:26.04 | Shared dev toolchain: Docker, version-switchable Go/Node/Python (`g`/`nvm`/`pyenv`), ripgrep/fzf/fd/gh/jq, filebrowser, AI agent CLIs, **Chrome** (amd64) / Playwright Chromium (arm64), `zeish-chrome-cdp` helper. Not run standalone in practice — `desktop` and `workstation` both build `FROM` it |
 | [`desktop`](images/desktop) | `base` | Budgie/Wayland desktop over wayvnc/noVNC, Chrome (amd64) / Firefox, VS Code, supervisord — everything in `base` plus a GUI |
+| [`desktop-x11`](images/desktop-x11) | `base` | X11 replacement for `desktop`: Xvfb/xfwm4/picom/x11vnc over noVNC (`:6080`); `sandboxd` drives input/screenshot in-process over XTEST (no `desktop-agentd`, no Wayland). `zeish-chrome` visible-window/CDP launcher |
 | [`ubuntu`](images/ubuntu) | ubuntu:26.04 | Base Ubuntu with SSH, user setup, and init |
 | [`workstation`](images/workstation) | `base` | Headless dev workstation — `base` plus sshd |
 

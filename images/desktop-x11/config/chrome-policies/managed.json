@@ -1,0 +1,14 @@
+{
+  "MetricsReportingEnabled": false,
+  "DefaultBrowserSettingEnabled": false,
+  "BrowserSignin": 0,
+  "SyncDisabled": true,
+  "PromotionalTabsEnabled": false,
+  "PromotionsEnabled": false,
+  "WelcomePageOnOSUpgradeEnabled": false,
+  "BuiltInDnsClientEnabled": false,
+  "SpellcheckServiceEnabled": false,
+  "AlternateErrorPagesEnabled": false,
+  "SearchSuggestEnabled": false,
+  "CloudReportingEnabled": false
+}

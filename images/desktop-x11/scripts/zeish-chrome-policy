@@ -1,0 +1,24 @@
+#!/usr/bin/env bash
+# zeish-chrome-policy — (re)assert the Chrome enterprise policy.
+#
+# Parity with the reference `box-chrome-policy`. The policy JSON is already
+# baked into the image at build time (see Dockerfile), so this is normally a
+# no-op; it exists so a caller can force a rewrite after a profile reset, or
+# drop in an override without rebuilding the image.
+#
+#   zeish-chrome-policy [source.json]
+#
+# Default source is the copy kept under /usr/local/share for exactly this.
+set -eu
+
+SRC="${1:-/usr/local/share/zeish/chrome-policies/managed.json}"
+DST="/etc/opt/chrome/policies/managed/managed.json"
+
+if [ ! -f "$SRC" ]; then
+  echo "zeish-chrome-policy: source not found: $SRC" >&2
+  exit 1
+fi
+
+mkdir -p "$(dirname "$DST")"
+install -m 0644 "$SRC" "$DST"
+echo "wrote $DST from $SRC"

@@ -1,0 +1,180 @@
+#!/usr/bin/env bash
+# zeish-chrome — launch/manage the agent-facing Chrome on the X11 desktop.
+#
+# Modes (mirrors the reference `box-chrome`):
+#   zeish-chrome --sand-prepare   Start Chrome in the background with CDP
+#                                 reachable but NO visible window. Returns once
+#                                 http://127.0.0.1:$CDP_PORT/json/version is up.
+#   zeish-chrome --new-window     Ensure Chrome is up, then open (or focus) a
+#                                 VISIBLE window on $DISPLAY. Returns once a
+#                                 page target (mapped window) exists.
+#   zeish-chrome <url>            Like --new-window, navigated to <url>.
+#
+# CDP: bound to 127.0.0.1 ONLY, never a routable address. Port is derived from
+# the X display number:  CDP_PORT = 9222 + <display-number>  (":1" -> 9223).
+#
+# Profile is persistent at /var/lib/zeish/agent-data/chrome-profile.
+set -u
+
+DISPLAY_NAME="${DISPLAY:-:1}"
+# strip leading ':' and any ".<screen>" suffix -> bare display number
+DNUM="${DISPLAY_NAME#:}"
+DNUM="${DNUM%%.*}"
+case "$DNUM" in
+  ''|*[!0-9]*) DNUM=0 ;;
+esac
+CDP_PORT=$((9222 + DNUM))
+
+PROFILE_DIR="/var/lib/zeish/agent-data/chrome-profile"
+LOG="/tmp/zeish-chrome-${CDP_PORT}.log"
+PIDFILE="/tmp/zeish-chrome-${CDP_PORT}.pid"
+MAX_RESTARTS=5
+
+log() { echo "$(date -u +%FT%TZ) $*" >>"$LOG"; }
+
+cdp_up() {
+  curl -sf "http://127.0.0.1:${CDP_PORT}/json/version" >/dev/null 2>&1
+}
+
+# Number of CDP "page" targets — 0 while running with --no-startup-window,
+# >=1 once a window has been opened.
+page_targets() {
+  curl -sf "http://127.0.0.1:${CDP_PORT}/json" 2>/dev/null \
+    | grep -o '"type"[[:space:]]*:[[:space:]]*"page"' \
+    | wc -l | tr -d ' '
+}
+
+is_bin() { command -v "$1" >/dev/null 2>&1 || test -x "$1"; }
+
+find_chrome() {
+  local c
+  local -a candidates=(
+    google-chrome-stable
+    google-chrome
+    chromium
+    chromium-browser
+    /usr/bin/google-chrome-stable
+    /usr/bin/google-chrome
+    /opt/google/chrome/chrome
+    /opt/google/chrome/google-chrome
+    /usr/local/bin/google-chrome-stable
+    /usr/local/bin/google-chrome
+  )
+  local home_dir="${HOME:-/home/user}"
+  for base in "$home_dir/.cache/ms-playwright" /home/user/.cache/ms-playwright; do
+    [ -d "$base" ] || continue
+    while IFS= read -r f; do
+      [ -n "$f" ] && candidates+=("$f")
+    done < <(find "$base" \( -name chrome -o -name headless_shell -o -name chromium \) -type f 2>/dev/null | head -n 5)
+  done
+  for c in "${candidates[@]}"; do
+    if is_bin "$c"; then
+      command -v "$c" 2>/dev/null || echo "$c"
+      return 0
+    fi
+  done
+  return 1
+}
+
+common_flags() {
+  local -a f=(
+    --no-first-run
+    --no-default-browser-check
+    --password-store=basic
+    --disable-dev-shm-usage
+    --remote-allow-origins=*
+    --user-data-dir="$PROFILE_DIR"
+    --remote-debugging-address=127.0.0.1
+    --remote-debugging-port="$CDP_PORT"
+  )
+  # Chrome refuses its sandbox as uid 0; sandboxd runs zeish-chrome as root.
+  [ "$(id -u)" = "0" ] && f+=(--no-sandbox)
+  printf '%s\n' "${f[@]}"
+}
+
+# Bounded restart watchdog. $1 = chrome binary, $2.. = extra args (first-window
+# url or --no-startup-window). Backgrounded + disowned so it outlives this shell.
+watchdog() {
+  local bin="$1"; shift
+  local -a extra=("$@")
+  local -a base
+  mapfile -t base < <(common_flags)
+  local restarts=0
+  while [ "$restarts" -le "$MAX_RESTARTS" ]; do
+    DISPLAY="$DISPLAY_NAME" "$bin" "${base[@]}" "${extra[@]}" >>"$LOG" 2>&1
+    local code=$?
+    restarts=$((restarts + 1))
+    log "chrome exited code=$code restart=${restarts}/${MAX_RESTARTS}"
+    sleep 1
+  done
+  log "chrome crash-looped past ${MAX_RESTARTS} restarts, giving up"
+}
+
+start_background() {
+  local bin
+  bin="$(find_chrome)" || { echo "NO_CHROME" >&2; exit 42; }
+
+  mkdir -p "$PROFILE_DIR"
+  # Stale single-instance locks from an unclean shutdown make every later
+  # launch silently no-op (delegates to a dead pid). Clear them first.
+  rm -f "$PROFILE_DIR"/Singleton{Lock,Socket,Cookie} 2>/dev/null || true
+  : >"$LOG"
+  log "starting chrome bin=$bin display=$DISPLAY_NAME cdp=127.0.0.1:${CDP_PORT}"
+
+  ( watchdog "$bin" --no-startup-window about:blank ) >>"$LOG" 2>&1 &
+  disown
+  echo $! >"$PIDFILE"
+
+  local i
+  for i in $(seq 1 40); do
+    cdp_up && return 0
+    sleep 0.25
+  done
+  echo "launch_failed (CDP never came up on 127.0.0.1:${CDP_PORT})" >&2
+  tail -n 30 "$LOG" >&2 2>/dev/null || true
+  return 1
+}
+
+ensure_running() {
+  cdp_up && return 0
+  start_background
+}
+
+open_window() {
+  local url="${1:-about:blank}"
+  ensure_running || exit 1
+
+  local bin
+  bin="$(find_chrome)" || { echo "NO_CHROME" >&2; exit 42; }
+  local -a base
+  mapfile -t base < <(common_flags)
+  # Second invocation with the same --user-data-dir hands off to the running
+  # instance and returns immediately.
+  DISPLAY="$DISPLAY_NAME" "$bin" "${base[@]}" --new-window "$url" >>"$LOG" 2>&1 || true
+
+  local i
+  for i in $(seq 1 40); do
+    [ "$(page_targets)" -ge 1 ] && { echo "STARTED"; return 0; }
+    sleep 0.25
+  done
+  echo "window_wait_timeout" >&2
+  return 1
+}
+
+case "${1:---sand-prepare}" in
+  --sand-prepare)
+    if cdp_up; then echo "READY"; exit 0; fi
+    start_background || exit 1
+    echo "READY"
+    ;;
+  --new-window)
+    open_window "about:blank"
+    ;;
+  -*)
+    echo "usage: zeish-chrome [--sand-prepare | --new-window | <url>]" >&2
+    exit 2
+    ;;
+  *)
+    open_window "$1"
+    ;;
+esac
