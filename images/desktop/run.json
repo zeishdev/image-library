@@ -1,9 +1,0 @@
-{
-  "ImageConfig": {
-    "Entrypoint": ["/entrypoint.sh"],
-    "Cmd": [],
-    "Env": [],
-    "WorkingDir": "/",
-    "User": "root"
-  }
-}
