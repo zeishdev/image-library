@@ -1,7 +1,7 @@
 # desktop-x11
 
 `zeish-agent-desktop-x11` — the X11 replacement for the Wayland [`desktop`](../desktop)
-image. Built `FROM ghcr.io/spinupdev/base:latest`.
+image. Built `FROM ghcr.io/zeishdev/base:latest`.
 
 ## What it is
 

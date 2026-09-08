@@ -1,4 +1,4 @@
-IMAGE = ghcr.io/spinupdev/desktop-x11
+IMAGE = ghcr.io/zeishdev/desktop-x11
 TAG   = latest
 DIR   = $(shell pwd)
 
