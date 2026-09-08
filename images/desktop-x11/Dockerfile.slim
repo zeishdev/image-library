@@ -1,0 +1,63 @@
+# Slim X11 desktop — the same supervisord X stack as ./Dockerfile, but built
+# straight from ubuntu:24.04 with no dev tooling, no VS Code, no CLIs and no
+# bundled Chrome. Purpose: a rootfs small enough (~1 GB vs ~7.7 GB) to boot as
+# a Firecracker microVM on a memory-constrained node, so zeish.desktop.v1
+# (PerformActions / Screenshot / clipboard / capabilities / forks / noVNC) can
+# be exercised live. PrepareBrowser / CDP need the full image.
+FROM ubuntu:24.04
+
+ARG DEBIAN_FRONTEND=noninteractive
+
+# Read by supervisord.conf and by sandboxd's DISPLAY/XDG forwarding. No `user`
+# account here (unlike base), so HOME/USER point at root.
+ENV DISPLAY=:1 \
+    VNC_PORT=5900 \
+    PROXY_PORT=6080 \
+    VNC_RESOLUTION=1280x800 \
+    VNC_DEPTH=24 \
+    XDG_RUNTIME_DIR=/run/user/0 \
+    HOME=/root \
+    USER=root
+
+# X stack only — Xvfb (+XTEST for sandboxd input), a stand-alone WM, compositor,
+# loopback VNC, the websockify/noVNC bridge, xclip for clipboard get/set,
+# xkb-data for the keymap XTEST needs, dbus for GTK app state, one font family.
+RUN apt-get update && apt-get install -y --no-install-recommends \
+        xvfb \
+        xfwm4 \
+        picom \
+        x11vnc \
+        python3-websockify \
+        x11-xserver-utils \
+        x11-utils \
+        xauth \
+        xclip \
+        xkb-data \
+        dbus \
+        dbus-x11 \
+        fonts-dejavu-core \
+        supervisor \
+        ca-certificates \
+        git \
+    && apt-get clean \
+    && rm -rf /var/lib/apt/lists/*
+
+# noVNC (spinupdev fork, zeish-desktop branch) — pinned to a commit so the GHA
+# layer cache can't keep serving a stale clone. Same SHA as ./Dockerfile.
+RUN git clone https://github.com/spinupdev/noVNC.git /opt/novnc && \
+    git -C /opt/novnc checkout 5280513 && \
+    ln -sf /opt/novnc/vnc.html /opt/novnc/index.html && \
+    apt-get purge -y git && apt-get autoremove -y
+
+COPY config/supervisord.conf /etc/supervisor/supervisord.conf
+COPY run.json /etc/run.json
+COPY scripts/entrypoint.sh /entrypoint.sh
+COPY scripts/websockify-fork.py /usr/local/bin/websockify-fork
+RUN chmod +x /entrypoint.sh /usr/local/bin/websockify-fork \
+    && mkdir -p /var/log/supervisor /workspace /var/lib/zeish/agent-data
+
+EXPOSE ${PROXY_PORT}
+
+# Docker Desktop: entrypoint.sh directly. microVM: initd (PID 1) reads
+# /etc/run.json -> /entrypoint.sh. sandboxd is injected + owned by initd.
+ENTRYPOINT ["/entrypoint.sh"]
