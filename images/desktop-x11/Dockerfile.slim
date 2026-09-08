@@ -46,8 +46,7 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
 # layer cache can't keep serving a stale clone. Same SHA as ./Dockerfile.
 RUN git clone https://github.com/spinupdev/noVNC.git /opt/novnc && \
     git -C /opt/novnc checkout 5280513 && \
-    ln -sf /opt/novnc/vnc.html /opt/novnc/index.html && \
-    apt-get purge -y git && apt-get autoremove -y
+    ln -sf /opt/novnc/vnc.html /opt/novnc/index.html
 
 COPY config/supervisord.conf /etc/supervisor/supervisord.conf
 COPY run.json /etc/run.json
