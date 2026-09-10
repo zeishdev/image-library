@@ -123,10 +123,11 @@ RUN mkdir -p /var/log/supervisor /workspace /var/lib/zeish/agent-data \
 # SANDBOXD_*) and sets HOME=/ - so without this file the two start paths would
 # run the desktop with a different HOME/USER and a `docker run` smoke test
 # would stop being evidence about the microVM. `:=` keeps a genuine runtime
-# override winning. Values must match the ENV above.
+# override winning, except HOME=/ which is initd's placeholder and is treated
+# as unset. Values must match the ENV above.
 RUN mkdir -p /etc/zeish && printf '%s\n' \
         ': "${USER:=user}"' \
-        ': "${HOME:=/home/user}"' \
+        'if [ -z "${HOME:-}" ] || [ "${HOME}" = "/" ]; then HOME=/home/user; fi' \
         ': "${DISPLAY:=:1}"' \
         ': "${VNC_PORT:=5900}"' \
         ': "${PROXY_PORT:=6080}"' \

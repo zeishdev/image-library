@@ -130,7 +130,7 @@ RUN ARCH=$(dpkg --print-architecture) \
         su -p user -c '\
             . "$NVM_DIR/nvm.sh" \
             && npx --yes playwright install --with-deps chromium \
-            && CHROME_BIN=$(find "$HOME/.cache/ms-playwright" -type f -name chrome -o -type f -name headless_shell 2>/dev/null | head -1) \
+            && CHROME_BIN=$(find "$HOME/.cache/ms-playwright" -type f \( -name chrome -o -name chromium \) 2>/dev/null | head -1) \
             && sudo ln -sf "$CHROME_BIN" /usr/local/bin/google-chrome-stable \
             && sudo ln -sf /usr/local/bin/google-chrome-stable /usr/local/bin/google-chrome \
             '; \
