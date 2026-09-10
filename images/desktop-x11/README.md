@@ -59,7 +59,7 @@ present; the X11 desktop and `zeish-chrome` still come up.
 reference `box-chrome`):
 
 - `zeish-chrome --sand-prepare` — background Chrome, CDP reachable, no window.
-- `zeish-chrome --new-window` — ensure Chrome is up, open a visible window on `$DISPLAY`.
+- `zeish-chrome --new-window [url]` — ensure Chrome is up, open a visible window on `$DISPLAY`.
 - `zeish-chrome <url>` — visible window navigated to `<url>`.
 - `zeish-chrome --close` — stop this display's Chrome for good (what sandboxd's
   `CloseBrowser` calls).

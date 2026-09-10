@@ -173,7 +173,10 @@ start_background() {
   : >"$LOG"
   log "starting chrome bin=$bin display=$DISPLAY_NAME cdp=127.0.0.1:${CDP_PORT}"
 
-  ( watchdog "$bin" --no-startup-window about:blank ) >>"$LOG" 2>&1 &
+  # --no-startup-window ONLY: passing a URL alongside it asks Chrome to both
+  # suppress the startup window and open one, and prewarm is supposed to leave
+  # the desktop untouched until --new-window asks for a window.
+  ( watchdog "$bin" --no-startup-window ) >>"$LOG" 2>&1 &
   disown
   echo $! >"$WATCHDOG_PIDFILE"
 
@@ -230,8 +233,32 @@ close_browser() {
   echo "CLOSED"
 }
 
+# True when the recorded watchdog process is still alive.
+watchdog_alive() {
+  local pid
+  [ -r "$WATCHDOG_PIDFILE" ] || return 1
+  pid="$(cat "$WATCHDOG_PIDFILE" 2>/dev/null)" || return 1
+  [ -n "$pid" ] && kill -0 "$pid" 2>/dev/null
+}
+
 ensure_running() {
   cdp_up && return 0
+
+  # A live watchdog with CDP down means Chrome is mid-restart. Starting a
+  # second watchdog here would leave two supervisors racing to relaunch the
+  # same --user-data-dir, and the loser's Chrome exits immediately on the
+  # singleton lock - which the survivor then counts as a crash. Wait for the
+  # existing one instead.
+  if watchdog_alive; then
+    local i
+    for i in $(seq 1 40); do
+      cdp_up && return 0
+      sleep 0.25
+    done
+    echo "chrome is restarting and CDP did not come back" >&2
+    return 1
+  fi
+
   start_background
 }
 
@@ -263,7 +290,9 @@ case "${1:---sand-prepare}" in
     echo "READY"
     ;;
   --new-window)
-    open_window "about:blank"
+    # sandboxd calls `zeish-chrome --new-window <url>` for NavigateUrl; taking
+    # $1 only meant every navigate silently opened about:blank instead.
+    open_window "${2:-about:blank}"
     ;;
   --close)
     close_browser
