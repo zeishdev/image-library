@@ -281,8 +281,7 @@ open_window() {
 
 case "${1:---sand-prepare}" in
   --sand-prepare)
-    if cdp_up; then echo "READY"; exit 0; fi
-    start_background || exit 1
+    ensure_running || exit 1
     echo "READY"
     ;;
   --new-window)
