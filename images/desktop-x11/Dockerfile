@@ -118,6 +118,9 @@ RUN mkdir -p /var/log/supervisor /workspace /var/lib/zeish/agent-data \
 
 EXPOSE ${PROXY_PORT}
 
+HEALTHCHECK --interval=10s --timeout=3s --start-period=15s --retries=3 \
+    CMD xdpyinfo -display :1 >/dev/null 2>&1 && test -S /run/supervisor.sock
+
 # Docker Desktop: entrypoint.sh directly.
 # microVM: initd (PID 1) reads /etc/run.json → /entrypoint.sh.
 ENTRYPOINT ["/entrypoint.sh"]

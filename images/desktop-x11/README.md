@@ -34,7 +34,7 @@ A headless X11 desktop for agent (`computer_use`) automation:
 
 | Port | Bind | What |
 |------|------|------|
-| `6080` | `0.0.0.0` (EXPOSEd) | noVNC / websockify — the only thing meant to be reachable |
+| `6080` | `0.0.0.0` (EXPOSEd) | unauthenticated noVNC / websockify — reachable only through proxyd's authenticated DesktopSession route; guest networking must not expose this port directly |
 | `5900` | `127.0.0.1` | raw VNC (x11vnc), loopback only |
 | `9222 + <display-number>` | `127.0.0.1` | Chrome DevTools Protocol. `DISPLAY=:1` → **9223**. Never bound to a routable address. |
 
@@ -76,6 +76,11 @@ enterprise policy.
 | `VNC_DEPTH` | `24` | Xvfb colour depth |
 | `VNC_PORT` | `5900` | loopback x11vnc port |
 | `PROXY_PORT` | `6080` | noVNC / websockify port |
+
+Port 6080 intentionally has no second websockify password or token. The
+security boundary is proxyd's authenticated DesktopSession route plus the
+microVM network isolation. Deployments must not publish the guest address or
+port 6080 to a tenant or shared node network.
 
 ## Build / run
 
