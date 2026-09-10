@@ -1,0 +1,100 @@
+# Slim X11 desktop — the same supervisord X stack as ./Dockerfile, but built
+# straight from ubuntu:24.04 with no dev tooling, no VS Code, no CLIs and no
+# bundled Chrome. Purpose: a rootfs small enough (~1 GB vs ~7.7 GB) to boot as
+# a Firecracker microVM on a memory-constrained node, so zeish.desktop.v1
+# (PerformActions / Screenshot / clipboard / capabilities / forks / noVNC) can
+# be exercised live. PrepareBrowser / CDP need the full image.
+FROM ubuntu:24.04
+
+ARG DEBIAN_FRONTEND=noninteractive
+
+# Read by supervisord.conf and by sandboxd's DISPLAY/XDG forwarding. No `user`
+# account here (unlike base), so HOME/USER point at root.
+ENV DISPLAY=:1 \
+    VNC_PORT=5900 \
+    PROXY_PORT=6080 \
+    VNC_RESOLUTION=1280x800 \
+    VNC_DEPTH=24 \
+    XDG_RUNTIME_DIR=/run/user/0 \
+    XAUTHORITY=/run/zeish/Xauthority \
+    HOME=/root \
+    USER=root
+
+# X stack only — Xvfb (+XTEST for sandboxd input), a stand-alone WM, compositor,
+# loopback VNC, the websockify/noVNC bridge, xclip for clipboard get/set,
+# xkb-data for the keymap XTEST needs, dbus for GTK app state, one font family.
+RUN apt-get update && apt-get install -y --no-install-recommends \
+        xvfb \
+        xfwm4 \
+        picom \
+        x11vnc \
+        python3-websockify \
+        x11-xserver-utils \
+        x11-utils \
+        xauth \
+        xclip \
+        xkb-data \
+        dbus \
+        dbus-x11 \
+        fonts-dejavu-core \
+        supervisor \
+        ca-certificates \
+        git \
+    && apt-get clean \
+    && rm -rf /var/lib/apt/lists/*
+
+# noVNC (spinupdev fork, zeish-desktop branch) — pinned to a commit so the GHA
+# layer cache can't keep serving a stale clone. Same SHA as ./Dockerfile.
+RUN git clone https://github.com/spinupdev/noVNC.git /opt/novnc && \
+    git -C /opt/novnc checkout 5280513 && \
+    ln -sf /opt/novnc/vnc.html /opt/novnc/index.html
+
+COPY config/supervisord.conf /etc/supervisor/supervisord.conf
+COPY run.json /etc/run.json
+COPY scripts/entrypoint.sh /entrypoint.sh
+COPY scripts/websockify-fork.py /usr/local/bin/websockify-fork
+RUN chmod +x /entrypoint.sh /usr/local/bin/websockify-fork \
+    && mkdir -p /var/log/supervisor /workspace /var/lib/zeish/agent-data
+
+# -- Canonical desktop defaults ----------------------------------------------
+# entrypoint.sh sources this. `docker run` inherits the ENV above; initd
+# forwards only its own allowlist (DISPLAY / XAUTHORITY / XDG_RUNTIME_DIR /
+# SANDBOXD_*) and sets HOME=/ - so without this file the two start paths would
+# run the desktop with a different HOME/USER and a `docker run` smoke test
+# would stop being evidence about the microVM. `:=` keeps a genuine runtime
+# override winning, except HOME=/ which is initd's placeholder and is treated
+# as unset. Values must match the ENV above.
+RUN mkdir -p /etc/zeish && printf '%s\n' \
+        ': "${USER:=root}"' \
+        'if [ -z "${HOME:-}" ] || [ "${HOME}" = "/" ]; then HOME=/root; fi' \
+        ': "${DISPLAY:=:1}"' \
+        ': "${VNC_PORT:=5900}"' \
+        ': "${PROXY_PORT:=6080}"' \
+        ': "${VNC_RESOLUTION:=1280x800}"' \
+        ': "${VNC_DEPTH:=24}"' \
+        ': "${XDG_RUNTIME_DIR:=/run/user/0}"' \
+        ': "${XAUTHORITY:=/run/zeish/Xauthority}"' \
+        > /etc/zeish/desktop.env
+
+EXPOSE ${PROXY_PORT}
+
+# Image-owned liveness: the X server must answer AND every supervised unit
+# (dbus/xvfb/xfwm4/picom/x11vnc/websockify) must be RUNNING — a bare
+# `test -S /run/supervisor.sock` reported "healthy" even when x11vnc or
+# websockify had crash-looped into FATAL and the noVNC desktop was dead.
+# Counting is what makes that stick: `grep -q RUNNING` passed as soon as ONE
+# unit was up, so a single crash-looped x11vnc still read healthy.
+# sandboxd is injected and supervised by initd, so its liveness is reported
+# by the guest supervisor rather than here.
+HEALTHCHECK --interval=10s --timeout=5s --start-period=20s --retries=3 \
+    CMD xdpyinfo -display "$DISPLAY" >/dev/null 2>&1 || exit 1; \
+        s=$(supervisorctl -c /etc/supervisor/supervisord.conf status 2>/dev/null); \
+        [ -n "$s" ] || exit 1; \
+        total=$(echo "$s" | grep -c .); \
+        running=$(echo "$s" | grep -c ' RUNNING '); \
+        [ "$running" -eq "$total" ] || exit 1; \
+        exit 0
+
+# Docker Desktop: entrypoint.sh directly. microVM: initd (PID 1) reads
+# /etc/run.json -> /entrypoint.sh. sandboxd is injected + owned by initd.
+ENTRYPOINT ["/entrypoint.sh"]

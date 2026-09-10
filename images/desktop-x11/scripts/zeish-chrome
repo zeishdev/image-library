@@ -1,0 +1,302 @@
+#!/usr/bin/env bash
+# zeish-chrome — launch/manage the agent-facing Chrome on the X11 desktop.
+#
+# Modes (mirrors the reference `box-chrome`):
+#   zeish-chrome --sand-prepare   Start Chrome in the background with CDP
+#                                 reachable but NO visible window. Returns once
+#                                 http://127.0.0.1:$CDP_PORT/json/version is up.
+#   zeish-chrome --new-window     Ensure Chrome is up, then open (or focus) a
+#                                 VISIBLE window on $DISPLAY. Returns once a
+#                                 page target (mapped window) exists.
+#   zeish-chrome <url>            Like --new-window, navigated to <url>.
+#   zeish-chrome --close          Stop this display's Chrome for good: sets the
+#                                 stop flag so the watchdog does NOT resurrect
+#                                 it, TERMs (then KILLs) the real browser pid,
+#                                 and returns once CDP is gone.
+#
+# CDP: bound to 127.0.0.1 ONLY, never a routable address. Port is derived from
+# the X display number:  CDP_PORT = 9222 + <display-number>  (":1" -> 9223).
+#
+# Profile is persistent and per-display at
+# /var/lib/zeish/agent-data/chrome-profile-<display-number> — Chromium allows
+# only one running instance per --user-data-dir, so a shared path would make a
+# second display (:2 -> CDP 9224) hand off to the first instead of starting
+# its own browser.
+set -u
+
+DISPLAY_NAME="${DISPLAY:-:1}"
+# strip leading ':' and any ".<screen>" suffix -> bare display number
+DNUM="${DISPLAY_NAME#:}"
+DNUM="${DNUM%%.*}"
+case "$DNUM" in
+  ''|*[!0-9]*) DNUM=0 ;;
+esac
+CDP_PORT=$((9222 + DNUM))
+
+PROFILE_DIR="/var/lib/zeish/agent-data/chrome-profile-${DNUM}"
+LOG="/tmp/zeish-chrome-${CDP_PORT}.log"
+# Two distinct pids: the watchdog shell, and the browser it is currently
+# supervising. `--close` (and sandboxd's CloseBrowser) needs the *browser* pid —
+# signalling the watchdog alone leaves Chrome running, reparented, with CDP up
+# and the profile still locked.
+WATCHDOG_PIDFILE="/tmp/zeish-chrome-${CDP_PORT}.watchdog.pid"
+CHROME_PIDFILE="/tmp/zeish-chrome-${CDP_PORT}.pid"
+# Presence of this file means "a stop was requested" — the watchdog checks it
+# after every browser exit and gives up instead of restarting.
+STOPFILE="/tmp/zeish-chrome-${CDP_PORT}.stop"
+MAX_RESTARTS=5
+
+log() { echo "$(date -u +%FT%TZ) $*" >>"$LOG"; }
+
+cdp_up() {
+  curl -sf "http://127.0.0.1:${CDP_PORT}/json/version" >/dev/null 2>&1
+}
+
+# Number of CDP "page" targets — 0 while running with --no-startup-window,
+# >=1 once a window has been opened.
+page_targets() {
+  curl -sf "http://127.0.0.1:${CDP_PORT}/json" 2>/dev/null \
+    | grep -o '"type"[[:space:]]*:[[:space:]]*"page"' \
+    | wc -l | tr -d ' '
+}
+
+is_bin() { command -v "$1" >/dev/null 2>&1 || test -x "$1"; }
+
+find_chrome() {
+  local c
+  local -a candidates=(
+    google-chrome-stable
+    google-chrome
+    chromium
+    chromium-browser
+    /usr/bin/google-chrome-stable
+    /usr/bin/google-chrome
+    /opt/google/chrome/chrome
+    /opt/google/chrome/google-chrome
+    /usr/local/bin/google-chrome-stable
+    /usr/local/bin/google-chrome
+  )
+  # Playwright's cache is the only browser on arm64. It ships BOTH a real
+  # `chrome`/`chromium` and a `headless_shell`. Never pick headless_shell, even
+  # behind an alias such as google-chrome-stable: --sand-prepare would succeed
+  # while every visible --new-window timed out.
+  local home_dir="${HOME:-/home/user}"
+  for base in "$home_dir/.cache/ms-playwright" /home/user/.cache/ms-playwright; do
+    [ -d "$base" ] || continue
+    while IFS= read -r f; do
+      [ -n "$f" ] && candidates+=("$f")
+    done < <(find "$base" \( -name chrome -o -name chromium \) -type f 2>/dev/null | head -n 5)
+  done
+  for c in "${candidates[@]}"; do
+    is_bin "$c" || continue
+    resolved="$(command -v "$c" 2>/dev/null || echo "$c")"
+    real="$(readlink -f "$resolved" 2>/dev/null || echo "$resolved")"
+    case "$real" in
+      *headless_shell*) continue ;;
+    esac
+    echo "$resolved"
+    return 0
+  done
+  return 1
+}
+
+common_flags() {
+  local -a f=(
+    --no-first-run
+    --no-default-browser-check
+    --password-store=basic
+    --disable-dev-shm-usage
+    --remote-allow-origins=*
+    --user-data-dir="$PROFILE_DIR"
+    --remote-debugging-address=127.0.0.1
+    --remote-debugging-port="$CDP_PORT"
+  )
+  # Chrome refuses its sandbox as uid 0; sandboxd runs zeish-chrome as root.
+  [ "$(id -u)" = "0" ] && f+=(--no-sandbox)
+  printf '%s\n' "${f[@]}"
+}
+
+# Bounded restart watchdog. $1 = chrome binary, $2.. = extra args (first-window
+# url or --no-startup-window). Backgrounded + disowned so it outlives this shell.
+#
+# It publishes the *browser's* pid (not its own) to CHROME_PIDFILE on every
+# launch, and stops for good — without burning a restart — when either the stop
+# flag is set (`--close`) or the browser exited cleanly. Only a crash (non-zero
+# exit with no stop requested) is worth resurrecting.
+watchdog() {
+  local bin="$1"; shift
+  local -a extra=("$@")
+  local -a base
+  mapfile -t base < <(common_flags)
+  local restarts=0
+  local chrome_pid code
+  while [ "$restarts" -le "$MAX_RESTARTS" ]; do
+    DISPLAY="$DISPLAY_NAME" "$bin" "${base[@]}" "${extra[@]}" >>"$LOG" 2>&1 &
+    chrome_pid=$!
+    echo "$chrome_pid" >"$CHROME_PIDFILE"
+    wait "$chrome_pid"
+    code=$?
+    rm -f "$CHROME_PIDFILE" 2>/dev/null || true
+    if [ -e "$STOPFILE" ]; then
+      log "chrome exited code=$code after a requested stop; not restarting"
+      break
+    fi
+    if [ "$code" -eq 0 ]; then
+      log "chrome exited cleanly (code=0); not restarting"
+      break
+    fi
+    restarts=$((restarts + 1))
+    if [ "$restarts" -gt "$MAX_RESTARTS" ]; then
+      log "chrome crash-looped past ${MAX_RESTARTS} restarts, giving up"
+      break
+    fi
+    log "chrome crashed code=$code restart=${restarts}/${MAX_RESTARTS}"
+    sleep 1
+  done
+  rm -f "$WATCHDOG_PIDFILE" 2>/dev/null || true
+}
+
+start_background() {
+  local bin
+  bin="$(find_chrome)" || { echo "NO_CHROME" >&2; exit 42; }
+
+  mkdir -p "$PROFILE_DIR"
+  # Stale single-instance locks from an unclean shutdown make every later
+  # launch silently no-op (delegates to a dead pid). Clear them first.
+  rm -f "$PROFILE_DIR"/Singleton{Lock,Socket,Cookie} 2>/dev/null || true
+  # A previous --close left the stop flag behind; starting again clears it.
+  rm -f "$STOPFILE" "$CHROME_PIDFILE" 2>/dev/null || true
+  : >"$LOG"
+  log "starting chrome bin=$bin display=$DISPLAY_NAME cdp=127.0.0.1:${CDP_PORT}"
+
+  # --no-startup-window ONLY: passing a URL alongside it asks Chrome to both
+  # suppress the startup window and open one, and prewarm is supposed to leave
+  # the desktop untouched until --new-window asks for a window.
+  ( watchdog "$bin" --no-startup-window ) >>"$LOG" 2>&1 &
+  disown
+  echo $! >"$WATCHDOG_PIDFILE"
+
+  local i
+  for i in $(seq 1 40); do
+    cdp_up && return 0
+    sleep 0.25
+  done
+  echo "launch_failed (CDP never came up on 127.0.0.1:${CDP_PORT})" >&2
+  tail -n 30 "$LOG" >&2 2>/dev/null || true
+  return 1
+}
+
+# Stop this display's browser for good. Idempotent: a browser that is already
+# gone is a success, so CloseBrowser can be retried safely.
+close_browser() {
+  : >"$STOPFILE"
+
+  local watchdog_pid="" chrome_pid=""
+  [ -r "$WATCHDOG_PIDFILE" ] && watchdog_pid="$(cat "$WATCHDOG_PIDFILE" 2>/dev/null)"
+  [ -r "$CHROME_PIDFILE" ] && chrome_pid="$(cat "$CHROME_PIDFILE" 2>/dev/null)"
+
+  # The browser first: a graceful TERM lets Chrome flush the profile.
+  if [ -n "$chrome_pid" ]; then
+    kill -TERM "$chrome_pid" 2>/dev/null || true
+  fi
+
+  local i
+  for i in $(seq 1 40); do
+    cdp_up || break
+    sleep 0.25
+  done
+
+  # Still answering after 10s: escalate, then take the watchdog with it.
+  if cdp_up && [ -n "$chrome_pid" ]; then
+    log "chrome ignored SIGTERM; sending SIGKILL to ${chrome_pid}"
+    kill -KILL "$chrome_pid" 2>/dev/null || true
+    for i in $(seq 1 20); do
+      cdp_up || break
+      sleep 0.25
+    done
+  fi
+
+  if [ -n "$watchdog_pid" ]; then
+    kill -TERM "$watchdog_pid" 2>/dev/null || true
+  fi
+  rm -f "$CHROME_PIDFILE" "$WATCHDOG_PIDFILE" 2>/dev/null || true
+
+  if cdp_up; then
+    echo "close_failed (CDP still answering on 127.0.0.1:${CDP_PORT})" >&2
+    return 1
+  fi
+  log "chrome closed"
+  echo "CLOSED"
+}
+
+# True when the recorded watchdog process is still alive.
+watchdog_alive() {
+  local pid
+  [ -r "$WATCHDOG_PIDFILE" ] || return 1
+  pid="$(cat "$WATCHDOG_PIDFILE" 2>/dev/null)" || return 1
+  [ -n "$pid" ] && kill -0 "$pid" 2>/dev/null
+}
+
+ensure_running() {
+  cdp_up && return 0
+
+  # A live watchdog with CDP down means Chrome is mid-restart. Starting a
+  # second watchdog here would leave two supervisors racing to relaunch the
+  # same --user-data-dir, and the loser's Chrome exits immediately on the
+  # singleton lock - which the survivor then counts as a crash. Wait for the
+  # existing one instead.
+  if watchdog_alive; then
+    local i
+    for i in $(seq 1 40); do
+      cdp_up && return 0
+      sleep 0.25
+    done
+    echo "chrome is restarting and CDP did not come back" >&2
+    return 1
+  fi
+
+  start_background
+}
+
+open_window() {
+  local url="${1:-about:blank}"
+  ensure_running || exit 1
+
+  local bin
+  bin="$(find_chrome)" || { echo "NO_CHROME" >&2; exit 42; }
+  local -a base
+  mapfile -t base < <(common_flags)
+  # Second invocation with the same --user-data-dir hands off to the running
+  # instance and returns immediately.
+  DISPLAY="$DISPLAY_NAME" "$bin" "${base[@]}" --new-window "$url" >>"$LOG" 2>&1 || true
+
+  local i
+  for i in $(seq 1 40); do
+    [ "$(page_targets)" -ge 1 ] && { echo "STARTED"; return 0; }
+    sleep 0.25
+  done
+  echo "window_wait_timeout" >&2
+  return 1
+}
+
+case "${1:---sand-prepare}" in
+  --sand-prepare)
+    ensure_running || exit 1
+    echo "READY"
+    ;;
+  --new-window)
+    # sandboxd calls `zeish-chrome --new-window <url>` for NavigateUrl; taking
+    # $1 only meant every navigate silently opened about:blank instead.
+    open_window "${2:-about:blank}"
+    ;;
+  --close)
+    close_browser
+    ;;
+  -*)
+    echo "usage: zeish-chrome [--sand-prepare | --new-window | --close | <url>]" >&2
+    exit 2
+    ;;
+  *)
+    open_window "$1"
+    ;;
+esac

@@ -1,4 +1,4 @@
-FROM ghcr.io/spinupdev/base:latest
+FROM ghcr.io/zeishdev/base:latest
 
 ARG DEBIAN_FRONTEND=noninteractive
 

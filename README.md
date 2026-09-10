@@ -7,18 +7,18 @@ Docker images for the spinupdev platform. Images are published to
 
 | Image | Base | Description |
 |-------|------|-------------|
-| [`base`](images/base) | ubuntu:26.04 | Shared dev toolchain: Docker, version-switchable Go/Node/Python (`g`/`nvm`/`pyenv`), ripgrep/fzf/fd/gh/jq, filebrowser, AI agent CLIs, **Chrome** (amd64) / Playwright Chromium (arm64), `zeish-chrome-cdp` helper. Not run standalone in practice — `desktop` and `workstation` both build `FROM` it |
-| [`desktop`](images/desktop) | `base` | Budgie/Wayland desktop over wayvnc/noVNC, Chrome (amd64) / Firefox, VS Code, supervisord — everything in `base` plus a GUI |
+| [`base`](images/base) | ubuntu:26.04 | Shared dev toolchain: Docker, version-switchable Go/Node/Python (`g`/`nvm`/`pyenv`), ripgrep/fzf/fd/gh/jq, filebrowser, AI agent CLIs, **Chrome** (amd64) / Playwright Chromium (arm64), `zeish-chrome-cdp` helper. Not run standalone in practice — `desktop-x11` and `workstation` both build `FROM` it |
+| [`desktop-x11`](images/desktop-x11) | `base` | X11 desktop: Xvfb/xfwm4/picom/x11vnc over noVNC (`:6080`); `sandboxd` drives input/screenshot in-process over XTEST (no `desktop-agentd`, no Wayland). `zeish-chrome` visible-window/CDP launcher |
 | [`ubuntu`](images/ubuntu) | ubuntu:26.04 | Base Ubuntu with SSH, user setup, and init |
 | [`workstation`](images/workstation) | `base` | Headless dev workstation — `base` plus sshd |
 
-`desktop` and `workstation` share the exact same toolchain (`base`) so a script
-or agent that works in one works in the other; `desktop` is just `base` with a
+`desktop-x11` and `workstation` share the exact same toolchain (`base`) so a script
+or agent that works in one works in the other; `desktop-x11` is just `base` with a
 GUI bolted on.
 
 ### Agent browser (Arin / Playwright CDP)
 
-`base` (and therefore `desktop` / `workstation`) installs:
+`base` (and therefore `desktop-x11` / `workstation`) installs:
 
 | Path | Role |
 |------|------|
@@ -41,21 +41,21 @@ and expose port **9222** for preview/CDP tunnels.
 Each image has a `Makefile` with standard targets.
 
 ```sh
-# desktop and workstation are FROM ghcr.io/spinupdev/base:latest, so build
+# desktop-x11 and workstation are FROM ghcr.io/zeishdev/base:latest, so build
 # base first (or `make base` from the repo root)
 make -C images/base build
 
 # Build a specific image
-make -C images/desktop build
+make -C images/desktop-x11 build
 
-# Build and run desktop (opens on :6080)
-make -C images/desktop run
+# Build and run the desktop image (opens on :6080)
+make -C images/desktop-x11 run
 ```
 
 Or use Docker Compose for the desktop image:
 
 ```sh
-cd images/desktop
+cd images/desktop-x11
 docker compose up
 ```
 
@@ -74,9 +74,9 @@ the [build workflow](.github/workflows/build.yml), which builds the image and
 pushes both the version tag and `latest` to GHCR.
 
 ```sh
-# Release desktop v1.2.0
-git tag desktop/v1.2.0
-git push origin desktop/v1.2.0
+# Release desktop-x11 v1.2.0
+git tag desktop-x11/v1.2.0
+git push origin desktop-x11/v1.2.0
 
 # Release ubuntu v1.0.0
 git tag ubuntu/v1.0.0
@@ -85,9 +85,9 @@ git push origin ubuntu/v1.0.0
 
 The workflow builds for all platforms listed in the image's `platform` file.
 
-`desktop` and `workstation` `FROM ghcr.io/spinupdev/base:latest` — release
+`desktop-x11` and `workstation` `FROM ghcr.io/zeishdev/base:latest` — release
 `base` first (`git tag base/v1.0.0 && git push origin base/v1.0.0`) whenever
-its Dockerfile changes, before re-releasing `desktop`/`workstation`.
+its Dockerfile changes, before re-releasing `desktop-x11`/`workstation`.
 
 ## Adding a new image
 
