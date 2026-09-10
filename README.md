@@ -41,7 +41,7 @@ and expose port **9222** for preview/CDP tunnels.
 Each image has a `Makefile` with standard targets.
 
 ```sh
-# desktop and workstation are FROM ghcr.io/spinupdev/base:latest, so build
+# desktop-x11 and workstation are FROM ghcr.io/zeishdev/base:latest, so build
 # base first (or `make base` from the repo root)
 make -C images/base build
 
@@ -74,9 +74,9 @@ the [build workflow](.github/workflows/build.yml), which builds the image and
 pushes both the version tag and `latest` to GHCR.
 
 ```sh
-# Release desktop v1.2.0
-git tag desktop/v1.2.0
-git push origin desktop/v1.2.0
+# Release desktop-x11 v1.2.0
+git tag desktop-x11/v1.2.0
+git push origin desktop-x11/v1.2.0
 
 # Release ubuntu v1.0.0
 git tag ubuntu/v1.0.0
@@ -85,7 +85,7 @@ git push origin ubuntu/v1.0.0
 
 The workflow builds for all platforms listed in the image's `platform` file.
 
-`desktop-x11` and `workstation` `FROM ghcr.io/spinupdev/base:latest` — release
+`desktop-x11` and `workstation` `FROM ghcr.io/zeishdev/base:latest` — release
 `base` first (`git tag base/v1.0.0 && git push origin base/v1.0.0`) whenever
 its Dockerfile changes, before re-releasing `desktop-x11`/`workstation`.
 

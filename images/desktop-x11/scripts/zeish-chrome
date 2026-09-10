@@ -13,7 +13,11 @@
 # CDP: bound to 127.0.0.1 ONLY, never a routable address. Port is derived from
 # the X display number:  CDP_PORT = 9222 + <display-number>  (":1" -> 9223).
 #
-# Profile is persistent at /var/lib/zeish/agent-data/chrome-profile.
+# Profile is persistent and per-display at
+# /var/lib/zeish/agent-data/chrome-profile-<display-number> — Chromium allows
+# only one running instance per --user-data-dir, so a shared path would make a
+# second display (:2 -> CDP 9224) hand off to the first instead of starting
+# its own browser.
 set -u
 
 DISPLAY_NAME="${DISPLAY:-:1}"
@@ -25,7 +29,7 @@ case "$DNUM" in
 esac
 CDP_PORT=$((9222 + DNUM))
 
-PROFILE_DIR="/var/lib/zeish/agent-data/chrome-profile"
+PROFILE_DIR="/var/lib/zeish/agent-data/chrome-profile-${DNUM}"
 LOG="/tmp/zeish-chrome-${CDP_PORT}.log"
 PIDFILE="/tmp/zeish-chrome-${CDP_PORT}.pid"
 MAX_RESTARTS=5

@@ -57,10 +57,18 @@ RUN chmod +x /entrypoint.sh /usr/local/bin/websockify-fork \
 
 EXPOSE ${PROXY_PORT}
 
-# sandboxd is injected and supervised by initd, so its liveness is reported by
-# the guest supervisor rather than this image-owned X11 healthcheck.
-HEALTHCHECK --interval=10s --timeout=3s --start-period=15s --retries=3 \
-    CMD xdpyinfo -display :1 >/dev/null 2>&1 && test -S /run/supervisor.sock
+# Image-owned liveness: the X server must answer AND every supervised unit
+# (dbus/xvfb/xfwm4/picom/x11vnc/websockify) must be RUNNING — a bare
+# `test -S /run/supervisor.sock` reported "healthy" even when x11vnc or
+# websockify had crash-looped into FATAL and the noVNC desktop was dead.
+# sandboxd is injected and supervised by initd, so its liveness is reported
+# by the guest supervisor rather than here.
+HEALTHCHECK --interval=10s --timeout=5s --start-period=20s --retries=3 \
+    CMD xdpyinfo -display "$DISPLAY" >/dev/null 2>&1 || exit 1; \
+        s=$(supervisorctl -c /etc/supervisor/supervisord.conf status 2>/dev/null); \
+        echo "$s" | grep -q RUNNING || exit 1; \
+        echo "$s" | grep -qE 'BACKOFF|FATAL|EXITED|STOPPED|UNKNOWN' && exit 1; \
+        exit 0
 
 # Docker Desktop: entrypoint.sh directly. microVM: initd (PID 1) reads
 # /etc/run.json -> /entrypoint.sh. sandboxd is injected + owned by initd.
