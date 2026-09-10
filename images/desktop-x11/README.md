@@ -9,7 +9,7 @@ A headless X11 desktop for agent (`computer_use`) automation:
 
 | Component | Role |
 |-----------|------|
-| `Xvfb :1` | headless X server (`+extension XTEST` **required**, `-ac` = no X auth) |
+| `Xvfb :1` | headless X server (`+extension XTEST` **required**; `-auth $XAUTHORITY`, **not** `-ac`) |
 | `xfwm4`   | stand-alone window manager (no panel, no session) |
 | `picom`   | compositor, `--backend xrender` (no GLX/DRI in a container) |
 | `x11vnc`  | RFB capture of `:1`, bound to `127.0.0.1` only |
@@ -61,11 +61,36 @@ reference `box-chrome`):
 - `zeish-chrome --sand-prepare` — background Chrome, CDP reachable, no window.
 - `zeish-chrome --new-window` — ensure Chrome is up, open a visible window on `$DISPLAY`.
 - `zeish-chrome <url>` — visible window navigated to `<url>`.
+- `zeish-chrome --close` — stop this display's Chrome for good (what sandboxd's
+  `CloseBrowser` calls).
 
-CDP is bound `127.0.0.1:$((9222 + <display-number>))`; persistent profile at
-`/var/lib/zeish/agent-data/chrome-profile`; stale `Singleton*` locks cleared on
-start; bounded restart watchdog (5). `zeish-chrome-policy` re-asserts the baked
+CDP is bound `127.0.0.1:$((9222 + <display-number>))`; persistent per-display
+profile at `/var/lib/zeish/agent-data/chrome-profile-<display-number>`; stale
+`Singleton*` locks cleared on start. `zeish-chrome-policy` re-asserts the baked
 enterprise policy.
+
+Two pidfiles per display, because they are two different processes:
+
+| file | pid |
+|---|---|
+| `/tmp/zeish-chrome-<cdp>.pid` | the **browser** — what `--close` signals |
+| `/tmp/zeish-chrome-<cdp>.watchdog.pid` | the supervising shell |
+| `/tmp/zeish-chrome-<cdp>.stop` | stop flag; its presence tells the watchdog not to restart |
+
+The watchdog restarts Chrome only on a **crash** (non-zero exit, no stop
+requested), bounded at 5. A clean exit or a `--close` ends it — otherwise
+`CloseBrowser` could never actually close anything.
+
+## X access control
+
+Xvfb runs **without `-ac`**. Every X client authenticates with an
+MIT-MAGIC-COOKIE from `$XAUTHORITY` (`/run/zeish/Xauthority`, root-owned 0600),
+re-seeded on every boot by `entrypoint.sh` so a cookie can't be inherited
+through a snapshot. `-ac` would let anything in the guest — the tenant's own
+code in `/workspace` included — screenshot the agent's browser session, inject
+input, and drive other fork displays. sandboxd gets the path through the
+`XAUTHORITY` initd forwards; the fork broker adds its own per-display cookie to
+the same file before starting a fork's Xvfb.
 
 ## Environment
 
