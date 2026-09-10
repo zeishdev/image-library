@@ -118,6 +118,8 @@ RUN mkdir -p /var/log/supervisor /workspace /var/lib/zeish/agent-data \
 
 EXPOSE ${PROXY_PORT}
 
+# sandboxd is injected and supervised by initd, so its liveness is reported by
+# the guest supervisor rather than this image-owned X11 healthcheck.
 HEALTHCHECK --interval=10s --timeout=3s --start-period=15s --retries=3 \
     CMD xdpyinfo -display :1 >/dev/null 2>&1 && test -S /run/supervisor.sock
 
