@@ -13,6 +13,10 @@
 
 set -u
 
+if [ -n "${ZEISH_EGRESS_PROXY:-}" ]; then
+  source /usr/local/lib/zeish/chrome-egress.sh || exit 1
+fi
+
 PORT="${1:-9222}"
 if ! command -v python3 >/dev/null 2>&1; then
   echo "NO_CHROME: python3 is required for the CDP relay" >&2
@@ -103,6 +107,10 @@ MAX_RESTARTS=5
 # genuinely broken binary doesn't spin the VM's CPU forever.
 watchdog() {
   local BIN="$1"
+  local -a egress=()
+  if [ -n "${ZEISH_EGRESS_PROXY:-}" ]; then
+    mapfile -t egress < <(zeish_chrome_egress_flags)
+  fi
   local restarts=0
   while [ "$restarts" -le "$MAX_RESTARTS" ]; do
     "$BIN" \
@@ -115,6 +123,7 @@ watchdog() {
       --remote-debugging-address=127.0.0.1 \
       --remote-debugging-port="$LOCAL_PORT" \
       --user-data-dir="$UD" \
+      "${egress[@]}" \
       about:blank >>"$LOG" 2>&1
     local code=$?
     restarts=$((restarts + 1))

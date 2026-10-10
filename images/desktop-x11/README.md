@@ -101,6 +101,7 @@ the same file before starting a fork's Xvfb.
 | `VNC_DEPTH` | `24` | Xvfb colour depth |
 | `VNC_PORT` | `5900` | loopback x11vnc port |
 | `PROXY_PORT` | `6080` | noVNC / websockify port |
+| `ZEISH_EGRESS_PROXY` | unset | Compute-managed public egress proxy passed to Chrome's `--proxy-server`; loopback and `.internal` destinations bypass it |
 
 Port 6080 intentionally has no second websockify password or token. The
 security boundary is proxyd's authenticated DesktopSession route plus the
