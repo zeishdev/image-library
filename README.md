@@ -36,6 +36,23 @@ Arin (`@arin/harness` `ensureZeishBrowserCdp`) prefers this helper, then falls
 back to the same binary paths. Edge templates should use the **desktop** image
 and expose port **9222** for preview/CDP tunnels.
 
+Both `zeish-chrome-cdp` and the desktop `zeish-chrome` launcher use
+`ZEISH_EGRESS_PROXY` as Chrome's `--proxy-server` when Compute supplies it.
+Chrome does not use `HTTP_PROXY` by itself. Loopback and `.internal` names
+bypass the public proxy so local guest services and private names use
+direct guest routes, subject to the host's network policy. The launchers
+disable QUIC when a proxy is configured;
+public HTTP and HTTPS requests go through the policy proxy. Arbitrary
+`NO_PROXY` entries are not copied into Chrome's bypass list. Compute's
+network enforcement remains responsible for denying protected addresses
+and direct connections that would bypass an internet policy.
+
+The shared proxy flag helper ships in `base`. Release `base` before
+releasing `desktop-x11` with these launchers. A desktop using an older base
+fails browser startup when `ZEISH_EGRESS_PROXY` is set and the helper is
+missing. Changing the proxy environment requires restarting the browser;
+policy changes at the existing proxy endpoint take effect on new requests.
+
 ## Building locally
 
 Each image has a `Makefile` with standard targets.

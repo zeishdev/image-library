@@ -140,6 +140,7 @@ RUN ARCH=$(dpkg --print-architecture) \
 # Shared by desktop + workstation (both FROM base). Starts Chrome with
 # --remote-debugging-port; see scripts/zeish-chrome-cdp.
 COPY scripts/zeish-chrome-cdp /usr/local/bin/zeish-chrome-cdp
+COPY scripts/zeish-chrome-egress.sh /usr/local/lib/zeish/chrome-egress.sh
 RUN chmod +x /usr/local/bin/zeish-chrome-cdp
 
 # ── Python via pyenv (version-switchable, alongside system python3) ──────────

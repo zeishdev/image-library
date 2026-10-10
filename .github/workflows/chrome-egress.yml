@@ -1,0 +1,33 @@
+name: Chrome Egress
+
+on:
+  pull_request:
+    paths:
+      - '.github/workflows/chrome-egress.yml'
+      - 'images/base/Dockerfile'
+      - 'images/base/scripts/zeish-chrome*'
+      - 'images/desktop-x11/scripts/zeish-chrome'
+      - 'tests/test_chrome_egress.py'
+  push:
+    paths:
+      - '.github/workflows/chrome-egress.yml'
+      - 'images/base/Dockerfile'
+      - 'images/base/scripts/zeish-chrome*'
+      - 'images/desktop-x11/scripts/zeish-chrome'
+      - 'tests/test_chrome_egress.py'
+
+permissions:
+  contents: read
+
+jobs:
+  launcher-tests:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Check launcher syntax
+        run: |
+          bash -n images/base/scripts/zeish-chrome-cdp \
+            images/base/scripts/zeish-chrome-egress.sh \
+            images/desktop-x11/scripts/zeish-chrome
+      - name: Check managed browser egress arguments
+        run: python3 -m unittest discover -s tests -p test_chrome_egress.py -v

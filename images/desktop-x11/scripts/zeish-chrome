@@ -24,6 +24,12 @@
 # its own browser.
 set -u
 
+if [ -n "${ZEISH_EGRESS_PROXY:-}" ]; then
+  # A managed machine must not silently launch an unproxied browser when its
+  # base image predates the shared policy helper.
+  source /usr/local/lib/zeish/chrome-egress.sh || exit 1
+fi
+
 DISPLAY_NAME="${DISPLAY:-:1}"
 # strip leading ':' and any ".<screen>" suffix -> bare display number
 DNUM="${DISPLAY_NAME#:}"
@@ -113,6 +119,11 @@ common_flags() {
   )
   # Chrome refuses its sandbox as uid 0; sandboxd runs zeish-chrome as root.
   [ "$(id -u)" = "0" ] && f+=(--no-sandbox)
+  if [ -n "${ZEISH_EGRESS_PROXY:-}" ]; then
+    local -a egress
+    mapfile -t egress < <(zeish_chrome_egress_flags)
+    f+=("${egress[@]}")
+  fi
   printf '%s\n' "${f[@]}"
 }
 
